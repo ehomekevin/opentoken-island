@@ -1,4 +1,5 @@
 const http = require("http");
+const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const { execFile } = require("child_process");
@@ -6,7 +7,10 @@ const { execFile } = require("child_process");
 const PORT = Number(process.env.OPENTOKEN_ISLAND_PORT || 4174);
 const ROOT = __dirname;
 const OPENTOKEN = process.env.OPENTOKEN_BIN || "/Users/yangguangxiaolaohu/.local/bin/opentoken";
-const CONFIG_PATH = path.join(process.env.HOME || "/Users/yangguangxiaolaohu", ".opentoken", "config.json");
+const HOME = process.env.HOME || "/Users/yangguangxiaolaohu";
+const CONFIG_PATH = path.join(HOME, ".opentoken", "config.json");
+const STATE_PATH = path.join(HOME, ".opentoken", "island-state.json");
+const DEFAULT_UPSTREAM_ORIGIN = "https://scys.com";
 
 const mime = {
   ".html": "text/html; charset=utf-8",
@@ -15,6 +19,87 @@ const mime = {
   ".png": "image/png",
   ".ico": "image/x-icon",
 };
+
+let state = loadState();
+
+function loadState() {
+  try {
+    return JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveState() {
+  fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
+  fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2) + "\n");
+}
+
+function readConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function writeConfig(config) {
+  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
+}
+
+function isLocalWebhook(webhook) {
+  try {
+    const url = new URL(webhook);
+    return ["127.0.0.1", "localhost"].includes(url.hostname) && Number(url.port) === PORT;
+  } catch {
+    return false;
+  }
+}
+
+function localWebhookFor(upstreamUrl) {
+  const upstream = new URL(upstreamUrl);
+  return `http://127.0.0.1:${PORT}${upstream.pathname}${upstream.search}`;
+}
+
+function upstreamFromLocal(localUrl) {
+  const local = new URL(localUrl);
+  return `${DEFAULT_UPSTREAM_ORIGIN}${local.pathname}${local.search}`;
+}
+
+function ensureProxyConfig() {
+  const config = readConfig();
+  const current = String(config.webhook_url || "");
+  let stateChanged = false;
+
+  if (current) {
+    if (isLocalWebhook(current)) {
+      if (!state.upstreamUrl) {
+        state.upstreamUrl = upstreamFromLocal(current);
+        stateChanged = true;
+      }
+    } else {
+      state.upstreamUrl = current;
+      stateChanged = true;
+      const localWebhook = localWebhookFor(current);
+      if (config.webhook_url !== localWebhook) {
+        config.webhook_url = localWebhook;
+        writeConfig(config);
+      }
+    }
+  } else if (state.upstreamUrl) {
+    config.webhook_url = localWebhookFor(state.upstreamUrl);
+    writeConfig(config);
+  }
+
+  if (stateChanged) saveState();
+  const upstreamUrl = state.upstreamUrl || "";
+  return {
+    upstreamUrl,
+    localWebhookUrl: upstreamUrl ? localWebhookFor(upstreamUrl) : current,
+    proxied: Boolean(current && isLocalWebhook(readConfig().webhook_url || current)),
+  };
+}
 
 function run(cmd, args, timeout = 30000) {
   return new Promise((resolve) => {
@@ -30,91 +115,309 @@ function run(cmd, args, timeout = 30000) {
   });
 }
 
-function formatCount(value) {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 1 : 2)}M`;
-  if (value >= 1_000) return `${Math.round(value / 1_000)}k`;
-  return String(value);
+function readBody(req) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+  });
 }
 
-function todayLocal() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+function requestText(method, targetUrl, body = "", headers = {}) {
+  return new Promise((resolve) => {
+    const target = new URL(targetUrl);
+    const transport = target.protocol === "https:" ? https : http;
+    const requestHeaders = { ...headers };
+    if (body && !requestHeaders["content-length"]) {
+      requestHeaders["content-length"] = Buffer.byteLength(body);
+    }
+
+    const req = transport.request(
+      target,
+      {
+        method,
+        headers: requestHeaders,
+        timeout: 30000,
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          resolve({
+            ok: res.statusCode >= 200 && res.statusCode < 300,
+            status: res.statusCode,
+            headers: res.headers,
+            body: text,
+            json: safeJson(text),
+          });
+        });
+      }
+    );
+
+    req.on("error", (error) => {
+      resolve({ ok: false, status: 0, headers: {}, body: "", json: null, error: error.message });
+    });
+    req.on("timeout", () => {
+      req.destroy(new Error("Request timed out"));
+    });
+    if (body) req.write(body);
+    req.end();
+  });
 }
 
-function summarize(rows) {
-  const dates = [...new Set(rows.map((row) => row.date))].sort();
-  const date = dates.includes(todayLocal()) ? todayLocal() : dates[dates.length - 1] || todayLocal();
-  const dayRows = rows.filter((row) => row.date === date);
-  const byTool = new Map();
-  for (const row of dayRows) {
-    byTool.set(row.tool, (byTool.get(row.tool) || 0) + Number(row.normalized || 0));
+function safeJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
   }
-  const tools = [...byTool.entries()]
-    .map(([name, value]) => ({ name, value }))
-    .sort((a, b) => b.value - a.value);
-  const total = tools.reduce((sum, tool) => sum + tool.value, 0);
-  const max = Math.max(1, ...tools.map((tool) => tool.value));
+}
+
+function formatCount(value) {
+  if (value >= 100_000_000) return `${(value / 100_000_000).toFixed(2)}亿`;
+  if (value >= 10_000) return `${(value / 10_000).toFixed(1)}万`;
+  return String(Math.round(value));
+}
+
+function rowsFromPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.rows)) return payload.rows;
+  if (Array.isArray(payload?.records)) return payload.records;
+  return [];
+}
+
+function rawTokens(row) {
+  return Number(row.input || 0)
+    + Number(row.output || 0)
+    + Number(row.cache_read || 0)
+    + Number(row.cache_write || 0);
+}
+
+function summarizeRows(rows, preferredDate = "") {
+  const dates = [...new Set(rows.map((row) => row.date).filter(Boolean))].sort();
+  const date = preferredDate && dates.includes(preferredDate)
+    ? preferredDate
+    : dates[dates.length - 1] || "";
+  const dayRows = rows.filter((row) => row.date === date);
+  const byTool = {};
+  let normalized = 0;
+  for (const row of dayRows) {
+    byTool[row.tool] = (byTool[row.tool] || 0) + rawTokens(row);
+    normalized += Number(row.normalized || 0);
+  }
+  const total = Object.values(byTool).reduce((sum, value) => sum + value, 0);
+  return { date, total, normalized, byTool, rowCount: dayRows.length };
+}
+
+function toolsFromMap(byTool = {}) {
+  const entries = Object.entries(byTool).sort((a, b) => b[1] - a[1]);
+  const max = Math.max(1, ...entries.map(([, value]) => value));
+  return entries.slice(0, 6).map(([name, value]) => ({
+    name,
+    value,
+    label: name.replace(/-/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()),
+    valueLabel: formatCount(value),
+    pct: Math.max(4, Math.round((value / max) * 100)),
+  }));
+}
+
+function sameToolBreakdown(entryTools = {}, summaryTools = {}) {
+  const keys = Object.keys(summaryTools);
+  if (!keys.length) return false;
+  return keys.every((key) => Number(entryTools[key] || 0) === Number(summaryTools[key] || 0));
+}
+
+function findOwnEntry(entries, summary) {
+  if (state.userId) {
+    const byUser = entries.find((entry) => String(entry.userId) === String(state.userId));
+    if (byUser) return byUser;
+  }
+  return entries.find((entry) =>
+    Number(entry.score || 0) === Number(summary.total || 0)
+    && sameToolBreakdown(entry.byTool || {}, summary.byTool || {})
+  );
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function refreshLeaderboard(summary, previousRank = null) {
+  const endpoint = "https://scys.com/tokenrank/api/subapp/leaderboard?board=total&range=today&limit=500";
+  let lastResult = null;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const result = await requestText("GET", endpoint, "", { accept: "application/json" });
+    lastResult = result;
+    const entries = Array.isArray(result.json?.entries) ? result.json.entries : [];
+    const own = findOwnEntry(entries, summary);
+
+    if (own) {
+      const index = entries.findIndex((entry) => entry.rank === own.rank || entry.userId === own.userId);
+      const previous = own.rank > 1
+        ? entries.find((entry) => entry.rank === own.rank - 1) || entries[index - 1] || null
+        : null;
+      const next = entries.find((entry) => entry.rank === own.rank + 1) || entries[index + 1] || null;
+      const gapToPrevious = previous ? Math.max(0, Number(previous.score || 0) - Number(own.score || 0) + 1) : 0;
+      const leadOverNext = next ? Math.max(0, Number(own.score || 0) - Number(next.score || 0)) : 0;
+      const rankDelta = typeof previousRank === "number" ? previousRank - Number(own.rank || previousRank) : 0;
+
+      state.userId = own.userId;
+      state.leaderboard = {
+        updatedAt: new Date().toISOString(),
+        board: "total",
+        range: "today",
+        entriesCount: entries.length,
+        own,
+        previous,
+        next,
+        gapToPrevious,
+        leadOverNext,
+        rankDelta,
+      };
+      saveState();
+      return state.leaderboard;
+    }
+
+    if (attempt < 3) await sleep(900);
+  }
+
+  state.leaderboard = {
+    updatedAt: new Date().toISOString(),
+    board: "total",
+    range: "today",
+    entriesCount: Array.isArray(lastResult?.json?.entries) ? lastResult.json.entries.length : 0,
+    error: lastResult?.error || "Current upload was not found in leaderboard yet",
+  };
+  saveState();
+  return state.leaderboard;
+}
+
+function buildSummary() {
+  const uploadSummary = state.lastUpload?.summary || null;
+  const board = state.leaderboard || null;
+  const own = board?.own || null;
+  const previous = board?.previous || null;
+  const next = board?.next || null;
+  const byTool = own?.byTool || uploadSummary?.byTool || {};
+  const total = Number(own?.score || uploadSummary?.total || 0);
+  const rank = own ? Number(own.rank) : null;
+  const gap = Number(board?.gapToPrevious || 0);
+  const lead = Number(board?.leadOverNext || 0);
+  const tools = toolsFromMap(byTool);
+
   return {
-    date,
+    ok: true,
+    waiting: !uploadSummary,
+    source: own ? "leaderboard" : uploadSummary ? "upload" : "waiting",
+    capturedAt: state.lastUpload?.capturedAt || "",
+    leaderboardUpdatedAt: board?.updatedAt || "",
+    date: uploadSummary?.date || "",
     total,
-    totalLabel: formatCount(total),
-    rank: 17,
-    rankDelta: 3,
-    nextRankGap: 42000,
-    xp: Math.min(4800, Math.round((total / 1_000_000) * 620)),
+    totalLabel: uploadSummary ? formatCount(total) : "--",
+    rank,
+    rankLabel: rank ? `#${rank}` : "#--",
+    rankDelta: Number(board?.rankDelta || 0),
+    previousName: previous?.name || "",
+    previousScore: Number(previous?.score || 0),
+    nextName: next?.name || "",
+    nextScore: Number(next?.score || 0),
+    gapToPrevious: gap,
+    gapToPreviousLabel: rank === 1 ? "0" : formatCount(gap),
+    leadOverNext: lead,
+    leadOverNextLabel: formatCount(lead),
+    nextRankGap: gap,
+    xp: Math.min(4800, Math.round((total / 1_000_000) * 60)),
     xpMax: 4800,
-    tools: tools.slice(0, 4).map((tool) => ({
-      ...tool,
-      label: tool.name.replace(/-/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()),
-      valueLabel: formatCount(tool.value),
-      pct: Math.max(4, Math.round((tool.value / max) * 100)),
-    })),
+    tools,
+    upstream: {
+      accepted: state.lastUpload?.upstream?.json?.accepted ?? null,
+      status: state.lastUpload?.upstream?.status ?? null,
+    },
   };
 }
 
 function accountStatus() {
+  const proxy = ensureProxyConfig();
+  const webhook = proxy.upstreamUrl || "";
+  let accountId = "";
   try {
-    const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
-    const webhook = String(config.webhook_url || "");
     const match = webhook.match(/\/u\/([^/?#]+)/);
-    const accountId = match ? match[1] : "";
-    return {
-      connected: Boolean(webhook),
-      accountId: accountId ? `${accountId.slice(0, 8)}...${accountId.slice(-6)}` : "",
-      host: webhook ? new URL(webhook).host : "",
-      configPath: CONFIG_PATH,
-    };
-  } catch (error) {
-    return {
-      connected: false,
-      accountId: "",
-      host: "",
-      configPath: CONFIG_PATH,
-      error: error.message,
-    };
+    accountId = match ? match[1] : "";
+  } catch {}
+  return {
+    connected: Boolean(webhook),
+    proxied: proxy.proxied,
+    accountId: accountId ? `${accountId.slice(0, 8)}...${accountId.slice(-6)}` : "",
+    host: webhook ? new URL(webhook).host : "",
+    localHost: proxy.localWebhookUrl ? new URL(proxy.localWebhookUrl).host : "",
+    configPath: CONFIG_PATH,
+  };
+}
+
+async function handleUploadProxy(req, res, url) {
+  const proxy = ensureProxyConfig();
+  const upstreamUrl = proxy.upstreamUrl || `${DEFAULT_UPSTREAM_ORIGIN}${url.pathname}${url.search}`;
+  const bodyBuffer = await readBody(req);
+  const body = bodyBuffer.toString("utf8");
+  const payload = safeJson(body);
+  const summary = summarizeRows(rowsFromPayload(payload));
+  const previousRank = state.leaderboard?.own?.rank ? Number(state.leaderboard.own.rank) : null;
+
+  state.lastUpload = {
+    capturedAt: new Date().toISOString(),
+    path: url.pathname,
+    payload,
+    summary,
+  };
+  saveState();
+
+  const upstream = await requestText("POST", upstreamUrl, body, {
+    "content-type": req.headers["content-type"] || "application/json",
+    "accept": req.headers.accept || "application/json",
+    "user-agent": req.headers["user-agent"] || "opentoken-island/0.1",
+  });
+
+  state.lastUpload.upstream = {
+    status: upstream.status,
+    ok: upstream.ok,
+    body: upstream.body,
+    json: upstream.json,
+    error: upstream.error || "",
+  };
+  saveState();
+
+  if (upstream.ok && summary.total > 0) {
+    await refreshLeaderboard(summary, previousRank);
   }
+
+  res.writeHead(upstream.status || 502, {
+    "content-type": upstream.headers?.["content-type"] || "application/json; charset=utf-8",
+  });
+  res.end(upstream.body || JSON.stringify({ status: 1, error: upstream.error || "Upstream upload failed" }));
 }
 
 async function handleApi(req, res, url) {
   if (url.pathname === "/api/summary") {
-    const since = url.searchParams.get("since") || todayLocal();
-    const result = await run(OPENTOKEN, ["preview", "--json", "--since", since], 45000);
-    if (!result.ok) return json(res, 500, { ok: false, error: result.stderr || result.message });
-    try {
-      const rows = JSON.parse(result.stdout);
-      return json(res, 200, { ok: true, ...summarize(rows), account: accountStatus(), service: await serviceStatus() });
-    } catch (error) {
-      return json(res, 500, { ok: false, error: `Invalid opentoken JSON: ${error.message}` });
+    if (url.searchParams.get("refresh") === "1" && state.lastUpload?.summary) {
+      await refreshLeaderboard(state.lastUpload.summary, state.leaderboard?.own?.rank || null);
     }
+    return json(res, 200, {
+      ...buildSummary(),
+      account: accountStatus(),
+      service: await serviceStatus(),
+    });
   }
 
   if (url.pathname === "/api/upload") {
     if (req.method !== "POST") return json(res, 405, { ok: false, error: "POST required" });
-    const since = url.searchParams.get("since") || todayLocal();
-    const result = await run(OPENTOKEN, ["upload", "--since", since], 90000);
+    ensureProxyConfig();
+    const result = await run(OPENTOKEN, ["upload"], 120000);
     return json(res, result.ok ? 200 : 500, {
       ok: result.ok,
       output: (result.stdout || result.stderr || result.message).trim(),
+      summary: buildSummary(),
       account: accountStatus(),
       service: await serviceStatus(),
     });
@@ -170,11 +473,16 @@ const server = http.createServer((req, res) => {
     });
     return res.end();
   }
+
   const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  if (req.method === "POST" && url.pathname.startsWith("/tokenrank/api/subapp/u/")) {
+    return handleUploadProxy(req, res, url);
+  }
   if (url.pathname.startsWith("/api/")) return handleApi(req, res, url);
   return serveStatic(req, res, url);
 });
 
+ensureProxyConfig();
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`OpenToken Island live server running at http://127.0.0.1:${PORT}`);
+  console.log(`OpenToken Island proxy running at http://127.0.0.1:${PORT}`);
 });

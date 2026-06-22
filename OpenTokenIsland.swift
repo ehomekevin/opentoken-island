@@ -161,9 +161,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
             guard let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let total = json["totalLabel"] as? String else { return }
-            let rank = json["rank"] as? Int ?? 17
+            let waiting = json["waiting"] as? Bool ?? false
+            let rank = json["rank"] as? Int
             DispatchQueue.main.async {
-                self?.statusItem.button?.title = " \(total) #\(rank)"
+                if waiting {
+                    self?.statusItem.button?.title = " waiting"
+                } else if let rank {
+                    self?.statusItem.button?.title = " \(total) #\(rank)"
+                } else {
+                    self?.statusItem.button?.title = " \(total)"
+                }
             }
         }.resume()
     }
