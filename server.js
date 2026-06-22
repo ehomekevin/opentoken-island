@@ -180,6 +180,10 @@ function formatCount(value) {
   return String(Math.round(value));
 }
 
+function formatPercent(value) {
+  return `${Math.round(value * 100)}%`;
+}
+
 function rowsFromPayload(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.rows)) return payload.rows;
@@ -220,6 +224,98 @@ function toolsFromMap(byTool = {}) {
     valueLabel: formatCount(value),
     pct: Math.max(4, Math.round((value / max) * 100)),
   }));
+}
+
+function buildGame({ total, rank, rankDelta, byTool, previous, next, gap, lead }) {
+  const levelSize = 25_000_000;
+  const highOutputTarget = 300_000_000;
+  const codexShareTarget = 0.3;
+  const codexValue = Number(byTool.codex || 0);
+  const codexShare = total > 0 ? codexValue / total : 0;
+  const accepted = Number(state.lastUpload?.upstream?.json?.accepted || 0);
+  const level = Math.max(1, Math.floor(total / levelSize) + 1);
+  const xp = total > 0 ? total % levelSize : 0;
+  const xpPct = Math.max(4, Math.round((xp / levelSize) * 100));
+  const scoreDone = total >= highOutputTarget;
+  const codexDone = codexShare >= codexShareTarget;
+  const king = rank === 1;
+  const rankQuest = king
+    ? {
+        icon: "crown",
+        title: "王座守护：今日总榜第 1",
+        detail: next ? `领先 ${next.name} ${formatCount(lead)}` : "当前无人追近",
+        rewardLabel: "+800",
+        done: true,
+      }
+    : {
+        icon: "trending-up",
+        title: "排名冲刺：超过上一名",
+        detail: previous ? `距 ${previous.name} 还差 ${formatCount(gap)}` : "等待榜单排名",
+        rewardLabel: "+800",
+        done: false,
+      };
+
+  return {
+    level,
+    levelTitle: `Builder Lv. ${level}`,
+    xp,
+    xpMax: levelSize,
+    xpPct,
+    xpLabel: `${formatCount(xp)} / ${formatCount(levelSize)} XP`,
+    codexShare,
+    codexShareLabel: formatPercent(codexShare),
+    quests: [
+      rankQuest,
+      {
+        icon: "target",
+        title: "每日任务：冲到 3 亿",
+        detail: `${formatCount(total)} / ${formatCount(highOutputTarget)}`,
+        rewardLabel: "+620",
+        done: scoreDone,
+      },
+      {
+        icon: "zap",
+        title: "支线任务：Codex 占比 30%",
+        detail: `${formatPercent(codexShare)} / ${formatPercent(codexShareTarget)}`,
+        rewardLabel: "+240",
+        done: codexDone,
+      },
+    ],
+    badges: [
+      {
+        icon: "crown",
+        title: "King Mode",
+        detail: king ? "今日总榜 #1" : rank ? `当前 #${rank}` : "等待排名",
+        unlocked: king,
+        featured: king,
+      },
+      {
+        icon: "flame",
+        title: "High Output",
+        detail: `${formatCount(total)} / ${formatCount(highOutputTarget)}`,
+        unlocked: scoreDone,
+        featured: scoreDone && !king,
+      },
+      {
+        icon: "zap",
+        title: "Codex Main",
+        detail: `${formatPercent(codexShare)} share`,
+        unlocked: codexDone,
+        featured: false,
+      },
+      {
+        icon: "trending-up",
+        title: "Rank Climber",
+        detail: rankDelta > 0 ? `上升 ${rankDelta} 名` : king ? "守住第 1" : "等待突破",
+        unlocked: rankDelta > 0 || king,
+        featured: false,
+      },
+    ],
+    sync: {
+      accepted,
+      done: accepted > 0,
+    },
+  };
 }
 
 function sameToolBreakdown(entryTools = {}, summaryTools = {}) {
@@ -306,6 +402,16 @@ function buildSummary() {
   const gap = Number(board?.gapToPrevious || 0);
   const lead = Number(board?.leadOverNext || 0);
   const tools = toolsFromMap(byTool);
+  const game = buildGame({
+    total,
+    rank,
+    rankDelta: Number(board?.rankDelta || 0),
+    byTool,
+    previous,
+    next,
+    gap,
+    lead,
+  });
 
   return {
     ok: true,
@@ -328,8 +434,11 @@ function buildSummary() {
     leadOverNext: lead,
     leadOverNextLabel: formatCount(lead),
     nextRankGap: gap,
-    xp: Math.min(4800, Math.round((total / 1_000_000) * 60)),
-    xpMax: 4800,
+    xp: game.xp,
+    xpMax: game.xpMax,
+    game,
+    quests: game.quests,
+    badges: game.badges,
     tools,
     upstream: {
       accepted: state.lastUpload?.upstream?.json?.accepted ?? null,

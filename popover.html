@@ -23,6 +23,42 @@ function icons() {
   if (window.lucide) lucide.createIcons();
 }
 
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[char]));
+}
+
+function renderQuests(quests) {
+  const list = quests && quests.length ? quests : [{
+    icon: 'timer-reset',
+    title: '等待 OpenToken 上报',
+    detail: '监听到下一次上传后自动同步',
+    rewardLabel: '+0',
+    done: false
+  }];
+  document.querySelector('.quests').innerHTML = list.map((quest) =>
+    '<div class="quest' + (quest.done ? ' done' : '') + '"><i data-lucide="' + esc(quest.icon || 'target') + '"></i><div><strong>' + esc(quest.title) + '</strong><span>' + esc(quest.detail) + '</span></div><div class="xp">' + esc(quest.done ? 'done' : quest.rewardLabel) + '</div></div>'
+  ).join('');
+}
+
+function renderBadges(badges) {
+  const list = badges && badges.length ? badges : [{
+    icon: 'lock',
+    title: 'Waiting',
+    detail: 'proxy listening',
+    unlocked: false,
+    featured: false
+  }];
+  document.querySelector('.badges').innerHTML = list.slice(0, 4).map((badge) =>
+    '<div class="badge' + (badge.featured ? ' featured' : '') + (badge.unlocked ? '' : ' locked') + '"><span class="badge-icon"><i data-lucide="' + esc(badge.unlocked ? badge.icon : 'lock') + '"></i></span><strong>' + esc(badge.title) + '</strong><span>' + esc(badge.detail) + '</span></div>'
+  ).join('');
+}
+
 function setLoad(isLoading) {
   $('#uploadButton').disabled = isLoading;
   $('#uploadButton').style.opacity = isLoading ? '0.72' : '1';
@@ -38,21 +74,22 @@ function render(data) {
     const daemon = data.service && data.service.running ? 'daemon running' : 'service unknown';
     $('#totalValue').textContent = '--';
     $('#rankValue').textContent = '#--';
+    document.querySelector('.level-line strong').textContent = 'Builder Lv. --';
     $('#xpText').textContent = '-- / 4,800 XP';
     $('#xpFill').style.width = '4%';
     $('#rankDelta').textContent = '0';
     $('#rankGap').innerHTML = '排名战报<br>等待 OpenToken 上报';
-    $('#dailyQuestCopy').textContent = '监听到下一次上传后自动同步';
     $('#serviceText').textContent = account + ' · proxy listening · ' + daemon;
     $('#toolList').innerHTML = '<div class="tool"><span>Waiting</span><span></span><span class="tool-value">--</span></div>';
+    renderQuests(data.quests);
+    renderBadges(data.badges);
     icons();
     return;
   }
-  const xp = Math.min(data.xp || 0, data.xpMax || 4800);
-  const max = data.xpMax || 4800;
+  const game = data.game || {};
+  const xp = Math.min(game.xp || data.xp || 0, game.xpMax || data.xpMax || 4800);
+  const max = game.xpMax || data.xpMax || 4800;
   const total = data.total || 0;
-  const questTarget = 300000000;
-  const gap = Math.max(0, questTarget - total);
   const rank = data.rank || null;
   const rankDelta = data.rankDelta || 0;
   const account = data.account && data.account.connected
@@ -60,22 +97,22 @@ function render(data) {
     : '未绑定 scys';
   const daemon = data.service && data.service.running ? 'daemon running' : 'service unknown';
   const battleText = rank === 1
-    ? '守住第 1<br>领先 ' + (data.nextName || '第 2 名') + ' ' + (data.leadOverNextLabel || '0')
-    : '距上一名 ' + (data.previousName || '') + '<br>还差 ' + (data.gapToPreviousLabel || '0');
+    ? '守住第 1<br>领先 ' + esc(data.nextName || '第 2 名') + ' ' + esc(data.leadOverNextLabel || '0')
+    : '距上一名 ' + esc(data.previousName || '') + '<br>还差 ' + esc(data.gapToPreviousLabel || '0');
 
   $('#totalValue').textContent = data.totalLabel || '0';
   $('#rankValue').textContent = data.rankLabel || (rank ? '#' + rank : '#--');
-  $('#xpText').textContent = xp.toLocaleString() + ' / ' + max.toLocaleString() + ' XP';
-  $('#xpFill').style.width = Math.max(4, Math.round((xp / max) * 100)) + '%';
+  document.querySelector('.level-line strong').textContent = game.levelTitle || 'Builder Lv. --';
+  $('#xpText').textContent = game.xpLabel || (xp.toLocaleString() + ' / ' + max.toLocaleString() + ' XP');
+  $('#xpFill').style.width = Math.max(4, game.xpPct || Math.round((xp / max) * 100)) + '%';
   $('#rankDelta').textContent = rankDelta > 0 ? '+' + rankDelta : String(rankDelta);
   $('#rankGap').innerHTML = battleText;
-  $('#dailyQuestCopy').textContent = gap
-    ? '还差 ' + gap.toLocaleString() + '，完成后解锁「High Output」'
-    : '今日任务已完成';
   $('#serviceText').textContent = account + ' · ' + data.date + ' · ' + daemon;
   $('#toolList').innerHTML = (data.tools || []).map((tool) =>
-    '<div class="tool"><span>' + tool.label + '</span><span class="bar"><i style="width:' + tool.pct + '%"></i></span><span class="tool-value">' + tool.valueLabel + '</span></div>'
+    '<div class="tool"><span>' + esc(tool.label) + '</span><span class="bar"><i style="width:' + tool.pct + '%"></i></span><span class="tool-value">' + esc(tool.valueLabel) + '</span></div>'
   ).join('') || '<div class="tool"><span>No data</span><span></span><span class="tool-value">--</span></div>';
+  renderQuests(data.quests);
+  renderBadges(data.badges);
   icons();
 }
 
