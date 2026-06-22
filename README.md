@@ -1,28 +1,44 @@
-# OpenToken Island Prototype
+# OpenToken Island
 
-A high-fidelity HTML prototype for an OpenToken macOS menu bar companion.
+A macOS menu bar companion for OpenToken.
 
-The concept combines:
+It combines:
 
-- A compact menu bar status pill
-- A Dynamic Island-style event popup
-- A gamified extension panel with rank, XP, quests, and achievements
-- SCYS-inspired visual styling and brand color treatment
+- A real macOS status bar item
+- A compact Apple-style Dynamic Island event popup
+- A popover extension panel with rank, XP, quests, and achievements
+- Live data from the local `opentoken` CLI
+- Manual upload through `opentoken upload`
 
-## Preview
+## Install Locally
 
-Open `index.html` directly in a browser, or serve the folder locally:
+Build and install the app:
 
 ```bash
-python3 -m http.server 4173
+rm -rf build "/Applications/OpenToken Island.app"
+mkdir -p "build/OpenToken Island.app/Contents/MacOS" \
+  "build/OpenToken Island.app/Contents/Resources/assets/scys"
+
+swiftc OpenTokenIsland.swift -framework Cocoa -framework WebKit \
+  -o "build/OpenToken Island.app/Contents/MacOS/OpenToken Island"
+
+cp popover.html island.html server.js "build/OpenToken Island.app/Contents/Resources/"
+cp assets/scys/icon_topnav.png "build/OpenToken Island.app/Contents/Resources/assets/scys/icon_topnav.png"
 ```
 
-Then visit:
+Create `build/OpenToken Island.app/Contents/Info.plist` with `LSUIElement` enabled, then copy the app to `/Applications`.
+
+This repository currently assumes:
 
 ```text
-http://127.0.0.1:4173/index.html?panel=1&variant=b
+opentoken binary: /Users/yangguangxiaolaohu/.local/bin/opentoken
+local API port: 4174
 ```
 
-## Notes
+## Files
 
-This is a static design prototype. Controls are mocked for interaction review and visual direction.
+- `OpenTokenIsland.swift` - native AppKit menu bar shell
+- `server.js` - local API bridge to the `opentoken` CLI
+- `popover.html` - extension popover UI
+- `island.html` - Dynamic Island notification UI
+- `index.html` - original browser prototype kept for design review

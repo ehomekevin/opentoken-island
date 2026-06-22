@@ -1063,15 +1063,15 @@
           <div class="panel-head">
             <div>
               <p class="panel-title">今日 OpenToken</p>
-              <p class="panel-sub">Last upload 09:01 · daemon running</p>
+              <p id="serviceText" class="panel-sub">Loading opentoken service...</p>
             </div>
             <span class="pill"><span class="status-dot"></span> live</span>
           </div>
 
           <div class="panel-actions" aria-label="OpenToken actions">
-            <button class="action-button primary" type="button">
+            <button id="uploadButton" class="action-button primary" type="button">
               <i data-lucide="upload-cloud"></i>
-              Upload now
+              <span id="uploadLabel">Upload now</span>
             </button>
             <button class="action-button" type="button">
               <i data-lucide="pause"></i>
@@ -1085,49 +1085,33 @@
           <div class="hero-metric">
             <div>
               <p class="metric-label">Normalized tokens</p>
-              <p class="metric-value">216k</p>
+              <p id="totalValue" class="metric-value">216k</p>
             </div>
-            <div class="rank-chip">#17</div>
+            <div id="rankValue" class="rank-chip">#17</div>
           </div>
 
           <div class="game-grid">
             <div class="level-card">
               <div class="level-line">
                 <strong>Builder Lv. 12</strong>
-                <span>3,420 / 4,800 XP</span>
+                <span id="xpText">3,420 / 4,800 XP</span>
               </div>
-              <div class="xp-bar"><i></i></div>
+              <div class="xp-bar"><i id="xpFill"></i></div>
             </div>
             <div class="battle-card">
-              <strong>+3</strong>
-              <span>排名战报<br>距离 #16 差 42k</span>
+              <strong id="rankDelta">+3</strong>
+              <span id="rankGap">排名战报<br>距离 #16 差 42k</span>
             </div>
           </div>
 
-          <div class="tool-list">
-            <div class="tool-row">
-              <span class="tool-name">Codex</span>
-              <span class="bar"><i style="width: 74%"></i></span>
-              <span class="tool-value">160k</span>
-            </div>
-            <div class="tool-row">
-              <span class="tool-name">Claude</span>
-              <span class="bar"><i style="width: 18%"></i></span>
-              <span class="tool-value">39k</span>
-            </div>
-            <div class="tool-row">
-              <span class="tool-name">Gemini</span>
-              <span class="bar"><i style="width: 8%"></i></span>
-              <span class="tool-value">17k</span>
-            </div>
-          </div>
+          <div id="toolList" class="tool-list"></div>
 
           <div class="quest-list">
             <div class="quest-card">
               <i data-lucide="target"></i>
               <div>
-                <strong>每日任务：冲到 300k</strong>
-                <span>还差 84k，完成后解锁「High Output」</span>
+                <strong id="dailyQuestTitle">每日任务：冲到 300k</strong>
+                <span id="dailyQuestCopy">读取真实 token 数据中...</span>
               </div>
               <div class="quest-xp">+620</div>
             </div>
@@ -1198,6 +1182,18 @@
     const eventMeta = document.querySelector("#eventMeta");
     const menuValue = document.querySelector("#menuValue");
     const rewardFill = document.querySelector("#rewardFill");
+    const totalValue = document.querySelector("#totalValue");
+    const rankValue = document.querySelector("#rankValue");
+    const xpText = document.querySelector("#xpText");
+    const xpFill = document.querySelector("#xpFill");
+    const rankDelta = document.querySelector("#rankDelta");
+    const rankGap = document.querySelector("#rankGap");
+    const toolList = document.querySelector("#toolList");
+    const serviceText = document.querySelector("#serviceText");
+    const uploadButton = document.querySelector("#uploadButton");
+    const uploadLabel = document.querySelector("#uploadLabel");
+    const dailyQuestCopy = document.querySelector("#dailyQuestCopy");
+    const API_BASE = `${window.location.origin}/api`;
     let hideTimer;
 
     const events = {
@@ -1239,6 +1235,60 @@
       hideTimer = setTimeout(() => island.classList.remove("show"), 4300);
     }
 
+    function setLoading(isLoading) {
+      uploadButton.disabled = isLoading;
+      uploadButton.style.opacity = isLoading ? "0.72" : "1";
+      uploadLabel.textContent = isLoading ? "Uploading..." : "Upload now";
+    }
+
+    function renderSummary(data) {
+      if (!data || !data.ok) return;
+      const rank = data.rank || 17;
+      const total = data.total || 0;
+      const totalLabel = data.totalLabel || "0";
+      const xp = Math.min(data.xp || 0, data.xpMax || 4800);
+      const xpMax = data.xpMax || 4800;
+      const questGoal = 300000;
+      const questGap = Math.max(0, questGoal - total);
+
+      menuValue.textContent = totalLabel;
+      totalValue.textContent = totalLabel;
+      rankValue.textContent = `#${rank}`;
+      xpText.textContent = `${xp.toLocaleString()} / ${xpMax.toLocaleString()} XP`;
+      xpFill.style.width = `${Math.max(4, Math.round((xp / xpMax) * 100))}%`;
+      rankDelta.textContent = `+${data.rankDelta || 0}`;
+      rankGap.innerHTML = `排名战报<br>距离 #${rank - 1} 差 ${(data.nextRankGap || 0).toLocaleString()}`;
+      dailyQuestCopy.textContent = questGap > 0
+        ? `还差 ${questGap.toLocaleString()}，完成后解锁「High Output」`
+        : "今日任务已完成，High Output 已解锁";
+      serviceText.textContent = data.service && data.service.running
+        ? `Live data · ${data.date} · daemon running`
+        : `Live data · ${data.date} · service status unknown`;
+
+      toolList.innerHTML = (data.tools || []).map((tool) => `
+        <div class="tool-row">
+          <span class="tool-name">${tool.label}</span>
+          <span class="bar"><i style="width: ${tool.pct}%"></i></span>
+          <span class="tool-value">${tool.valueLabel}</span>
+        </div>
+      `).join("");
+      refreshIcons();
+    }
+
+    async function loadSummary({ announce = false } = {}) {
+      try {
+        const response = await fetch(`${API_BASE}/summary`);
+        const data = await response.json();
+        renderSummary(data);
+        if (announce) {
+          events.rank.copy = `真实数据已刷新：今日 ${data.totalLabel} token，当前排名 #${data.rank}。`;
+          showEvent("rank");
+        }
+      } catch (error) {
+        serviceText.textContent = "Live API unavailable";
+      }
+    }
+
     variantButtons.forEach((button) => {
       button.addEventListener("click", () => {
         variantButtons.forEach((item) => item.classList.toggle("active", item === button));
@@ -1258,7 +1308,25 @@
         island.classList.remove("show");
         clearTimeout(hideTimer);
         popover.classList.toggle("open");
+        if (popover.classList.contains("open")) loadSummary();
       });
+    });
+
+    uploadButton.addEventListener("click", async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(`${API_BASE}/upload`, { method: "POST" });
+        const data = await response.json();
+        await loadSummary();
+        events.achievement.copy = data.ok
+          ? "已调用 opentoken upload，排行榜数据正在同步。"
+          : `上传失败：${data.error || data.output || "unknown error"}`;
+        showEvent("achievement");
+      } catch (error) {
+        serviceText.textContent = "Upload API unavailable";
+      } finally {
+        setLoading(false);
+      }
     });
 
     document.addEventListener("keydown", (event) => {
@@ -1280,6 +1348,8 @@
     } else {
       setTimeout(() => showEvent(params.get("event") === "achievement" ? "achievement" : "rank"), 500);
     }
+    loadSummary();
+    setInterval(loadSummary, 300000);
   </script>
 </body>
 </html>
