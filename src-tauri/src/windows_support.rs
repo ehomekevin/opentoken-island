@@ -187,11 +187,11 @@ mod tests {
     }
 
     #[test]
-    fn lifts_detail_panel_above_bottom_taskbar_icon_without_over_clamping_right_edge() {
+    fn lifts_detail_panel_above_hidden_icons_flyout_without_over_clamping_right_edge() {
         let origin = floating_window_origin_bounded_with_anchor_gap(
-            1780, 1032, 32, 32, 466, 736, 12, 56, 0, 0, 1920, 1040,
+            1780, 1032, 32, 32, 466, 736, 12, 220, 0, 0, 1920, 1040,
         );
-        assert_eq!(origin.1 + 736, 976);
+        assert_eq!(origin.1 + 736, 812);
         assert_eq!(origin.0 + 466, 1908);
     }
 }

@@ -38,7 +38,7 @@ const PANEL_WINDOW_HEIGHT: i32 = PANEL_HEIGHT + PANEL_SHADOW_PAD * 2;
 const ISLAND_WIDTH: i32 = 560;
 const ISLAND_HEIGHT: i32 = 118;
 const FLOATING_MARGIN: i32 = 12;
-const PANEL_ANCHOR_GAP: i32 = 56;
+const PANEL_ANCHOR_GAP: i32 = 220;
 
 struct ServerProcess(Mutex<Option<Child>>);
 struct PanelState {

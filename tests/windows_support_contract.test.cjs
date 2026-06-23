@@ -69,8 +69,8 @@ assert.match(
 );
 assert.match(
   mainRs,
-  /const PANEL_ANCHOR_GAP: i32 = 56;/,
-  "The full tray panel should float clearly above the taskbar instead of hugging it"
+  /const PANEL_ANCHOR_GAP: i32 = 220;/,
+  "The full tray panel should float above the Windows hidden-icons flyout instead of hugging it"
 );
 assert.match(
   mainRs,
