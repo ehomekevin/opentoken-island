@@ -87,7 +87,9 @@ pub fn floating_window_origin_bounded_with_anchor_gap(
     work_height: i32,
 ) -> (i32, i32) {
     let x = tray_x + tray_width / 2 - window_width / 2;
-    let y = if tray_y > window_height + anchor_gap {
+    let tray_center_y = tray_y + tray_height / 2;
+    let work_center_y = work_y + work_height / 2;
+    let y = if tray_center_y >= work_center_y {
         tray_y - window_height - anchor_gap
     } else {
         tray_y + tray_height + anchor_gap
@@ -187,11 +189,12 @@ mod tests {
     }
 
     #[test]
-    fn lifts_detail_panel_above_hidden_icons_flyout_without_over_clamping_right_edge() {
+    fn lifts_detail_panel_to_top_edge_when_hidden_icons_need_more_clearance() {
         let origin = floating_window_origin_bounded_with_anchor_gap(
-            1780, 1032, 32, 32, 466, 736, 12, 220, 0, 0, 1920, 1040,
+            1600, 1019, 32, 32, 466, 736, 12, 430, 0, 0, 1707, 1019,
         );
-        assert_eq!(origin.1 + 736, 812);
-        assert_eq!(origin.0 + 466, 1908);
+        assert_eq!(origin.1, 12);
+        assert_eq!(origin.1 + 736, 748);
+        assert_eq!(origin.0 + 466, 1695);
     }
 }

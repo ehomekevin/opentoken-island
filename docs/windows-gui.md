@@ -35,7 +35,7 @@ The tray icon appears in the Windows notification area.
 - Use `Open Browser UI` to open `http://127.0.0.1:4174/popover.html`.
 - Use `Open Logs` to open `%USERPROFILE%\.opentoken\island-events.log`.
 
-The panel and island WebViews are created hidden during startup. Hover uses the same `popover.html` panel as the main UI; left click switches that panel into a pinned state. The floating panel is borderless, transparent, clamped to the current monitor work area, keeps a 220 px gap from the tray anchor so it floats above the Windows hidden-icons flyout, and includes extra transparent padding so the glass panel shadow and rounded corners are not clipped.
+The panel and island WebViews are created hidden during startup. Hover uses the same `popover.html` panel as the main UI; left click switches that panel into a pinned state. The floating panel is borderless, transparent, clamped to the current monitor work area, keeps a 430 px gap from the tray anchor so it floats above the Windows hidden-icons flyout, and includes extra transparent padding so the glass panel shadow and rounded corners are not clipped.
 
 If port `4174` is already open, the Tauri app reuses the existing local server. If the port is closed, it starts `server.js` with:
 
