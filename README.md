@@ -37,6 +37,12 @@ OPENTOKEN_BIN="/path/to/opentoken" ./scripts/install.sh
 
 The local API port defaults to `4174`; override it with `OPENTOKEN_ISLAND_PORT=4175` if needed.
 
+## Windows GUI
+
+Windows support is implemented as a Tauri tray shell around the existing local proxy and Web UI. It does not require .NET SDK.
+
+See [docs/windows-gui.md](docs/windows-gui.md) for setup, development, and build commands.
+
 ## Build Installer Package
 
 Build a local macOS installer package:
