@@ -94,4 +94,10 @@ mod tests {
         let origin = floating_window_origin(8, 1032, 32, 32, 560, 118, 12);
         assert_eq!(origin.0, 12);
     }
+
+    #[test]
+    fn positions_detail_panel_above_bottom_taskbar_icon() {
+        let origin = floating_window_origin(1780, 1032, 32, 32, 430, 700, 12);
+        assert_eq!(origin, (1581, 320));
+    }
 }

@@ -34,27 +34,37 @@ assert.match(
 assert.match(
   mainRs,
   /prewarm_windows\(app\.handle\(\)\)\?/,
-  "Panel and hover WebViews should be created hidden during setup so first tray click is fast"
+  "Panel WebView should be created hidden during setup so first tray hover/click is fast"
 );
 assert.match(
   mainRs,
-  /TrayIconEvent::Enter/,
-  "Tray hover must show the quota island when the cursor enters the tray icon"
+  /TrayIconEvent::Enter[\s\S]*show_hover_panel/,
+  "Tray hover must show the full quota panel when the cursor enters the tray icon"
 );
 assert.match(
   mainRs,
-  /TrayIconEvent::Move/,
-  "Tray hover should keep the quota island aligned while the cursor moves over the tray icon"
+  /TrayIconEvent::Move[\s\S]*show_hover_panel/,
+  "Tray hover should keep the full quota panel aligned while the cursor moves over the tray icon"
 );
 assert.match(
   mainRs,
-  /TrayIconEvent::Leave/,
-  "Tray hover must schedule the quota island to hide after the cursor leaves the tray icon"
+  /TrayIconEvent::Leave[\s\S]*schedule_hide_panel/,
+  "Tray hover must schedule the panel to hide after the cursor leaves the tray icon"
 );
 assert.match(
   mainRs,
-  /schedule_hide_island/,
-  "Tray hover should hide via a delayed scheduler instead of immediately closing the WebView"
+  /TrayIconEvent::Click[\s\S]*pin_panel/,
+  "Left click must pin the panel so it stays visible"
+);
+assert.match(
+  mainRs,
+  /external_url\("popover\.html"\)[\s\S]*WebviewWindowBuilder::new\(app, PANEL_LABEL/,
+  "The tray panel must render the same popover UI used by the browser panel"
+);
+assert.doesNotMatch(
+  mainRs,
+  /show_hover_island/,
+  "Hover must not use the short island surface"
 );
 
 console.log("windows scaffold contract ok");

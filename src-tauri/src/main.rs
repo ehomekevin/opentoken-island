@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Mutex,
     },
     time::Duration,
@@ -30,17 +30,31 @@ use windows_support::{
 
 const PANEL_LABEL: &str = "panel";
 const ISLAND_LABEL: &str = "island";
+const PANEL_WIDTH: i32 = 430;
+const PANEL_HEIGHT: i32 = 700;
 const ISLAND_WIDTH: i32 = 560;
 const ISLAND_HEIGHT: i32 = 118;
 const FLOATING_MARGIN: i32 = 12;
 
 struct ServerProcess(Mutex<Option<Child>>);
-struct HoverState(AtomicU64);
+struct PanelState {
+    epoch: AtomicU64,
+    pinned: AtomicBool,
+}
+
+impl PanelState {
+    fn new() -> Self {
+        Self {
+            epoch: AtomicU64::new(0),
+            pinned: AtomicBool::new(false),
+        }
+    }
+}
 
 fn main() {
     tauri::Builder::default()
         .manage(ServerProcess(Mutex::new(None)))
-        .manage(HoverState(AtomicU64::new(0)))
+        .manage(PanelState::new())
         .setup(|app| {
             start_server_if_needed(app.handle())?;
             prewarm_windows(app.handle())?;
@@ -49,7 +63,11 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if matches!(window.label(), PANEL_LABEL | ISLAND_LABEL) {
+                if window.label() == PANEL_LABEL {
+                    set_panel_pinned(&window.app_handle(), false);
+                    api.prevent_close();
+                    let _ = window.hide();
+                } else if window.label() == ISLAND_LABEL {
                     api.prevent_close();
                     let _ = window.hide();
                 }
@@ -116,18 +134,20 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             match event {
                 TrayIconEvent::Enter { position, rect, .. }
                 | TrayIconEvent::Move { position, rect, .. } => {
-                    let _ = show_hover_island(&app, position, rect);
+                    let _ = show_hover_panel(&app, position, rect);
                 }
                 TrayIconEvent::Leave { .. } => {
-                    schedule_hide_island(&app, Duration::from_millis(900));
+                    schedule_hide_panel(&app, Duration::from_millis(250));
                 }
                 TrayIconEvent::Click {
+                    position,
+                    rect,
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Up,
                     ..
                 } => {
                     let _ = hide_island(&app);
-                    let _ = show_panel(&app);
+                    let _ = pin_panel(&app, position, rect);
                 }
                 _ => {}
             }
@@ -204,7 +224,19 @@ fn prewarm_windows(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn show_panel(app: &AppHandle) -> tauri::Result<()> {
+    let cursor = app
+        .cursor_position()
+        .unwrap_or_else(|_| PhysicalPosition::new(0.0, 0.0));
+    pin_panel(app, cursor, Rect::default())
+}
+
+fn pin_panel(app: &AppHandle, cursor: PhysicalPosition<f64>, rect: Rect) -> tauri::Result<()> {
+    set_panel_pinned(app, true);
+    bump_panel_epoch(app);
     let window = ensure_panel_window(app)?;
+    let position = floating_position(cursor, rect, PANEL_WIDTH, PANEL_HEIGHT);
+    window.set_focusable(true)?;
+    window.set_position(Position::Physical(position))?;
     window.show()?;
     window.set_focus()?;
     Ok(())
@@ -218,10 +250,29 @@ fn ensure_panel_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let url = external_url("popover.html")?;
     WebviewWindowBuilder::new(app, PANEL_LABEL, WebviewUrl::External(url))
         .title("OpenToken Island")
-        .inner_size(430.0, 700.0)
+        .inner_size(PANEL_WIDTH as f64, PANEL_HEIGHT as f64)
         .resizable(false)
         .visible(false)
         .build()
+}
+
+fn show_hover_panel(
+    app: &AppHandle,
+    cursor: PhysicalPosition<f64>,
+    rect: Rect,
+) -> tauri::Result<()> {
+    if is_panel_pinned(app) {
+        return Ok(());
+    }
+
+    let epoch = bump_panel_epoch(app);
+    let window = ensure_panel_window(app)?;
+    let position = floating_position(cursor, rect, PANEL_WIDTH, PANEL_HEIGHT);
+    window.set_focusable(false)?;
+    window.set_position(Position::Physical(position))?;
+    window.show()?;
+    schedule_hide_panel_at_epoch(app, Duration::from_secs(3), epoch);
+    Ok(())
 }
 
 fn show_island(app: &AppHandle) -> tauri::Result<()> {
@@ -229,36 +280,19 @@ fn show_island(app: &AppHandle) -> tauri::Result<()> {
         .cursor_position()
         .unwrap_or_else(|_| PhysicalPosition::new(0.0, 0.0));
     let window = ensure_island_window(app)?;
-    let (x, y) = floating_window_origin(
-        cursor.x.round() as i32,
-        cursor.y.round() as i32,
-        32,
-        32,
-        ISLAND_WIDTH,
-        ISLAND_HEIGHT,
-        FLOATING_MARGIN,
-    );
-    bump_hover_epoch(app);
-    window.set_position(Position::Physical(PhysicalPosition::new(x, y)))?;
+    let position = floating_position(cursor, Rect::default(), ISLAND_WIDTH, ISLAND_HEIGHT);
+    window.set_position(Position::Physical(position))?;
     window.show()?;
     schedule_hide_island(app, Duration::from_secs(5));
     Ok(())
 }
 
-fn show_hover_island(
-    app: &AppHandle,
+fn floating_position(
     cursor: PhysicalPosition<f64>,
     rect: Rect,
-) -> tauri::Result<()> {
-    bump_hover_epoch(app);
-    let window = ensure_island_window(app)?;
-    let position = island_position(cursor, rect);
-    window.set_position(Position::Physical(position))?;
-    window.show()?;
-    Ok(())
-}
-
-fn island_position(cursor: PhysicalPosition<f64>, rect: Rect) -> PhysicalPosition<i32> {
+    window_width: i32,
+    window_height: i32,
+) -> PhysicalPosition<i32> {
     let rect_position = rect.position.to_physical::<i32>(1.0);
     let rect_size = rect.size.to_physical::<u32>(1.0);
     let (tray_x, tray_y, tray_width, tray_height) = if rect_size.width == 0 || rect_size.height == 0
@@ -278,8 +312,8 @@ fn island_position(cursor: PhysicalPosition<f64>, rect: Rect) -> PhysicalPositio
         tray_y,
         tray_width,
         tray_height,
-        ISLAND_WIDTH,
-        ISLAND_HEIGHT,
+        window_width,
+        window_height,
         FLOATING_MARGIN,
     );
     PhysicalPosition::new(x, y)
@@ -304,14 +338,39 @@ fn ensure_island_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .build()
 }
 
-fn schedule_hide_island(app: &AppHandle, delay: Duration) {
-    let epoch = bump_hover_epoch(app);
+fn schedule_hide_panel(app: &AppHandle, delay: Duration) {
+    let epoch = bump_panel_epoch(app);
+    schedule_hide_panel_at_epoch(app, delay, epoch);
+}
+
+fn schedule_hide_panel_at_epoch(app: &AppHandle, delay: Duration, epoch: u64) {
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(delay);
-        if current_hover_epoch(&app) == epoch {
-            let _ = hide_island(&app);
+        if current_panel_epoch(&app) == epoch && !is_panel_pinned(&app) {
+            let app_for_main = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                let _ = hide_panel(&app_for_main);
+            });
         }
+    });
+}
+
+fn hide_panel(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(PANEL_LABEL) {
+        window.hide()?;
+    }
+    Ok(())
+}
+
+fn schedule_hide_island(app: &AppHandle, delay: Duration) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(delay);
+        let app_for_main = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let _ = hide_island(&app_for_main);
+        });
     });
 }
 
@@ -322,15 +381,28 @@ fn hide_island(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn bump_hover_epoch(app: &AppHandle) -> u64 {
-    app.try_state::<HoverState>()
-        .map(|state| state.0.fetch_add(1, Ordering::SeqCst) + 1)
+fn set_panel_pinned(app: &AppHandle, pinned: bool) {
+    if let Some(state) = app.try_state::<PanelState>() {
+        state.pinned.store(pinned, Ordering::SeqCst);
+        state.epoch.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+fn is_panel_pinned(app: &AppHandle) -> bool {
+    app.try_state::<PanelState>()
+        .map(|state| state.pinned.load(Ordering::SeqCst))
+        .unwrap_or(false)
+}
+
+fn bump_panel_epoch(app: &AppHandle) -> u64 {
+    app.try_state::<PanelState>()
+        .map(|state| state.epoch.fetch_add(1, Ordering::SeqCst) + 1)
         .unwrap_or(0)
 }
 
-fn current_hover_epoch(app: &AppHandle) -> u64 {
-    app.try_state::<HoverState>()
-        .map(|state| state.0.load(Ordering::SeqCst))
+fn current_panel_epoch(app: &AppHandle) -> u64 {
+    app.try_state::<PanelState>()
+        .map(|state| state.epoch.load(Ordering::SeqCst))
         .unwrap_or(0)
 }
 
