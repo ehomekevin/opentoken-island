@@ -22,6 +22,7 @@ pub fn is_port_open(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
 }
 
+#[cfg(test)]
 pub fn floating_window_origin(
     tray_x: i32,
     tray_y: i32,
@@ -39,6 +40,76 @@ pub fn floating_window_origin(
     };
 
     (x, y.max(margin))
+}
+
+#[cfg(test)]
+pub fn floating_window_origin_bounded(
+    tray_x: i32,
+    tray_y: i32,
+    tray_width: i32,
+    tray_height: i32,
+    window_width: i32,
+    window_height: i32,
+    margin: i32,
+    work_x: i32,
+    work_y: i32,
+    work_width: i32,
+    work_height: i32,
+) -> (i32, i32) {
+    floating_window_origin_bounded_with_anchor_gap(
+        tray_x,
+        tray_y,
+        tray_width,
+        tray_height,
+        window_width,
+        window_height,
+        margin,
+        margin,
+        work_x,
+        work_y,
+        work_width,
+        work_height,
+    )
+}
+
+pub fn floating_window_origin_bounded_with_anchor_gap(
+    tray_x: i32,
+    tray_y: i32,
+    tray_width: i32,
+    tray_height: i32,
+    window_width: i32,
+    window_height: i32,
+    edge_margin: i32,
+    anchor_gap: i32,
+    work_x: i32,
+    work_y: i32,
+    work_width: i32,
+    work_height: i32,
+) -> (i32, i32) {
+    let x = tray_x + tray_width / 2 - window_width / 2;
+    let y = if tray_y > window_height + anchor_gap {
+        tray_y - window_height - anchor_gap
+    } else {
+        tray_y + tray_height + anchor_gap
+    };
+
+    let min_x = work_x + edge_margin;
+    let min_y = work_y + edge_margin;
+    let max_x = work_x + work_width - window_width - edge_margin;
+    let max_y = work_y + work_height - window_height - edge_margin;
+
+    let x = if max_x >= min_x {
+        x.clamp(min_x, max_x)
+    } else {
+        min_x
+    };
+    let y = if max_y >= min_y {
+        y.clamp(min_y, max_y)
+    } else {
+        min_y
+    };
+
+    (x, y)
 }
 
 #[cfg(test)]
@@ -99,5 +170,28 @@ mod tests {
     fn positions_detail_panel_above_bottom_taskbar_icon() {
         let origin = floating_window_origin(1780, 1032, 32, 32, 430, 700, 12);
         assert_eq!(origin, (1581, 320));
+    }
+
+    #[test]
+    fn clamps_detail_panel_inside_right_edge() {
+        let origin =
+            floating_window_origin_bounded(1888, 1000, 32, 32, 466, 736, 18, 0, 0, 1920, 1040);
+        assert_eq!(origin.0 + 466, 1902);
+    }
+
+    #[test]
+    fn clamps_detail_panel_inside_bottom_edge_when_below_icon() {
+        let origin = floating_window_origin_bounded(24, 24, 32, 32, 466, 736, 18, 0, 0, 1920, 1040);
+        assert_eq!(origin.1, 74);
+        assert!(origin.1 + 736 <= 1040 - 18);
+    }
+
+    #[test]
+    fn lifts_detail_panel_above_bottom_taskbar_icon_without_over_clamping_right_edge() {
+        let origin = floating_window_origin_bounded_with_anchor_gap(
+            1780, 1032, 32, 32, 466, 736, 12, 56, 0, 0, 1920, 1040,
+        );
+        assert_eq!(origin.1 + 736, 976);
+        assert_eq!(origin.0 + 466, 1908);
     }
 }

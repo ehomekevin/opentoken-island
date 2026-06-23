@@ -24,17 +24,21 @@ use tauri::{
     WebviewWindowBuilder,
 };
 use windows_support::{
-    floating_window_origin, is_port_open, local_url, opentoken_bin, server_resource_path,
-    DEFAULT_PORT,
+    floating_window_origin_bounded_with_anchor_gap, is_port_open, local_url, opentoken_bin,
+    server_resource_path, DEFAULT_PORT,
 };
 
 const PANEL_LABEL: &str = "panel";
 const ISLAND_LABEL: &str = "island";
 const PANEL_WIDTH: i32 = 430;
 const PANEL_HEIGHT: i32 = 700;
+const PANEL_SHADOW_PAD: i32 = 18;
+const PANEL_WINDOW_WIDTH: i32 = PANEL_WIDTH + PANEL_SHADOW_PAD * 2;
+const PANEL_WINDOW_HEIGHT: i32 = PANEL_HEIGHT + PANEL_SHADOW_PAD * 2;
 const ISLAND_WIDTH: i32 = 560;
 const ISLAND_HEIGHT: i32 = 118;
 const FLOATING_MARGIN: i32 = 12;
+const PANEL_ANCHOR_GAP: i32 = 56;
 
 struct ServerProcess(Mutex<Option<Child>>);
 struct PanelState {
@@ -234,7 +238,15 @@ fn pin_panel(app: &AppHandle, cursor: PhysicalPosition<f64>, rect: Rect) -> taur
     set_panel_pinned(app, true);
     bump_panel_epoch(app);
     let window = ensure_panel_window(app)?;
-    let position = floating_position(cursor, rect, PANEL_WIDTH, PANEL_HEIGHT);
+    let position = floating_position(
+        app,
+        cursor,
+        rect,
+        PANEL_WINDOW_WIDTH,
+        PANEL_WINDOW_HEIGHT,
+        FLOATING_MARGIN,
+        PANEL_ANCHOR_GAP,
+    );
     window.set_focusable(true)?;
     window.set_position(Position::Physical(position))?;
     window.show()?;
@@ -250,8 +262,13 @@ fn ensure_panel_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let url = external_url("popover.html")?;
     WebviewWindowBuilder::new(app, PANEL_LABEL, WebviewUrl::External(url))
         .title("OpenToken Island")
-        .inner_size(PANEL_WIDTH as f64, PANEL_HEIGHT as f64)
+        .inner_size(PANEL_WINDOW_WIDTH as f64, PANEL_WINDOW_HEIGHT as f64)
+        .decorations(false)
+        .transparent(true)
+        .focusable(false)
         .resizable(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
         .visible(false)
         .build()
 }
@@ -267,7 +284,15 @@ fn show_hover_panel(
 
     let epoch = bump_panel_epoch(app);
     let window = ensure_panel_window(app)?;
-    let position = floating_position(cursor, rect, PANEL_WIDTH, PANEL_HEIGHT);
+    let position = floating_position(
+        app,
+        cursor,
+        rect,
+        PANEL_WINDOW_WIDTH,
+        PANEL_WINDOW_HEIGHT,
+        FLOATING_MARGIN,
+        PANEL_ANCHOR_GAP,
+    );
     window.set_focusable(false)?;
     window.set_position(Position::Physical(position))?;
     window.show()?;
@@ -280,7 +305,15 @@ fn show_island(app: &AppHandle) -> tauri::Result<()> {
         .cursor_position()
         .unwrap_or_else(|_| PhysicalPosition::new(0.0, 0.0));
     let window = ensure_island_window(app)?;
-    let position = floating_position(cursor, Rect::default(), ISLAND_WIDTH, ISLAND_HEIGHT);
+    let position = floating_position(
+        app,
+        cursor,
+        Rect::default(),
+        ISLAND_WIDTH,
+        ISLAND_HEIGHT,
+        FLOATING_MARGIN,
+        FLOATING_MARGIN,
+    );
     window.set_position(Position::Physical(position))?;
     window.show()?;
     schedule_hide_island(app, Duration::from_secs(5));
@@ -288,10 +321,13 @@ fn show_island(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn floating_position(
+    app: &AppHandle,
     cursor: PhysicalPosition<f64>,
     rect: Rect,
     window_width: i32,
     window_height: i32,
+    edge_margin: i32,
+    anchor_gap: i32,
 ) -> PhysicalPosition<i32> {
     let rect_position = rect.position.to_physical::<i32>(1.0);
     let rect_size = rect.size.to_physical::<u32>(1.0);
@@ -307,15 +343,44 @@ fn floating_position(
         )
     };
 
-    let (x, y) = floating_window_origin(
-        tray_x,
-        tray_y,
-        tray_width,
-        tray_height,
-        window_width,
-        window_height,
-        FLOATING_MARGIN,
-    );
+    let monitor = app
+        .monitor_from_point(cursor.x, cursor.y)
+        .ok()
+        .flatten()
+        .or_else(|| app.primary_monitor().ok().flatten());
+
+    let (x, y) = if let Some(monitor) = monitor {
+        let work_area = monitor.work_area();
+        floating_window_origin_bounded_with_anchor_gap(
+            tray_x,
+            tray_y,
+            tray_width,
+            tray_height,
+            window_width,
+            window_height,
+            edge_margin,
+            anchor_gap,
+            work_area.position.x,
+            work_area.position.y,
+            work_area.size.width as i32,
+            work_area.size.height as i32,
+        )
+    } else {
+        floating_window_origin_bounded_with_anchor_gap(
+            tray_x,
+            tray_y,
+            tray_width,
+            tray_height,
+            window_width,
+            window_height,
+            edge_margin,
+            anchor_gap,
+            0,
+            0,
+            window_width + edge_margin * 2,
+            window_height + edge_margin * 2,
+        )
+    };
     PhysicalPosition::new(x, y)
 }
 

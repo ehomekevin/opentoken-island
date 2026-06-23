@@ -26,6 +26,7 @@ assert.match(cargoToml, /tauri = \{ version = "2"/);
 assert.match(cargoToml, /features = \["tray-icon", "image-png"\]/);
 
 const mainRs = fs.readFileSync(path.join(root, "src-tauri/src/main.rs"), "utf8");
+const popoverHtml = fs.readFileSync(path.join(root, "popover.html"), "utf8");
 assert.match(
   mainRs,
   /#!\[cfg_attr\(\s*all\(not\(debug_assertions\), target_os = "windows"\),\s*windows_subsystem = "windows"\s*\)\]/,
@@ -61,10 +62,40 @@ assert.match(
   /external_url\("popover\.html"\)[\s\S]*WebviewWindowBuilder::new\(app, PANEL_LABEL/,
   "The tray panel must render the same popover UI used by the browser panel"
 );
+assert.match(
+  mainRs,
+  /WebviewWindowBuilder::new\(app, PANEL_LABEL[\s\S]*\.decorations\(false\)[\s\S]*\.transparent\(true\)[\s\S]*\.skip_taskbar\(true\)[\s\S]*\.always_on_top\(true\)/,
+  "The tray panel must be a transparent, borderless floating layer"
+);
+assert.match(
+  mainRs,
+  /const PANEL_ANCHOR_GAP: i32 = 56;/,
+  "The full tray panel should float clearly above the taskbar instead of hugging it"
+);
+assert.match(
+  mainRs,
+  /floating_position\(\s*app,\s*cursor,\s*rect,\s*PANEL_WINDOW_WIDTH,\s*PANEL_WINDOW_HEIGHT,\s*FLOATING_MARGIN,\s*PANEL_ANCHOR_GAP,?\s*\)/,
+  "The full tray panel must use a larger anchor gap than the screen edge clamp margin"
+);
 assert.doesNotMatch(
   mainRs,
   /show_hover_island/,
   "Hover must not use the short island surface"
+);
+assert.match(
+  popoverHtml,
+  /backdrop-filter:blur\(26px\)/,
+  "Popover panel should use glass blur for a refined floating surface"
+);
+assert.match(
+  popoverHtml,
+  /background:linear-gradient\([^;]+rgba\(18,18,20,\.82\)/,
+  "Popover panel should have translucent glass background"
+);
+assert.match(
+  popoverHtml,
+  /body\{[^}]*padding:18px/,
+  "Popover body should leave enough transparent padding for shadow and rounded corners"
 );
 
 console.log("windows scaffold contract ok");
