@@ -25,4 +25,11 @@ const cargoToml = fs.readFileSync(path.join(root, "src-tauri/Cargo.toml"), "utf8
 assert.match(cargoToml, /tauri = \{ version = "2"/);
 assert.match(cargoToml, /features = \["tray-icon", "image-png"\]/);
 
+const mainRs = fs.readFileSync(path.join(root, "src-tauri/src/main.rs"), "utf8");
+assert.match(
+  mainRs,
+  /#!\[cfg_attr\(all\(not\(debug_assertions\), target_os = "windows"\), windows_subsystem = "windows"\)\]/,
+  "Windows release builds must use GUI subsystem so no cmd window appears"
+);
+
 console.log("windows scaffold contract ok");
