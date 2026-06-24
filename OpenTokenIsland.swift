@@ -62,9 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         contextMenu.addItem(quitItem)
         statusItem.menu = nil
 
-        let rightClick = NSClickGestureRecognizer(target: self, action: #selector(showContextMenu(_:)))
-        rightClick.buttonMask = 0x2
-        button.addGestureRecognizer(rightClick)
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
     }
 
     private func setupPopover() {
@@ -205,6 +203,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
 
     @objc private func togglePopover() {
         guard let button = statusItem.button else { return }
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            showContextMenu()
+            return
+        }
+
         if popover.isShown {
             popover.performClose(nil)
         } else {
@@ -226,11 +229,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         NSApp.terminate(nil)
     }
 
-    @objc private func showContextMenu(_ recognizer: NSClickGestureRecognizer) {
+    private func showContextMenu() {
         guard let button = statusItem.button else { return }
-        statusItem.menu = contextMenu
-        button.performClick(nil)
-        statusItem.menu = nil
+        contextMenu.popUp(
+            positioning: nil,
+            at: NSPoint(x: 0, y: button.bounds.height + 4),
+            in: button
+        )
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if navigationAction.request.url?.absoluteString == "opentoken-island://quit" {
+            decisionHandler(.cancel)
+            NSApp.terminate(nil)
+            return
+        }
+
+        decisionHandler(.allow)
     }
 
     private func updateStatusTitle() {
